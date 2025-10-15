@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -7,33 +8,54 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5174",
+    origin: "http://localhost:5173",
     methods: ["GET", "POST"],
   },
 });
 
+const mongoose = require("mongoose");
+
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error("MongoDB connection error:", err));
+
+const Message = require("./models/Message");
+
 app.use(cors());
 app.use(express.json());
 
-// Socket.io connection handler
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
-  // Join a room (for simplicity, one global room)
-  socket.on("join", (username) => {
+  socket.on("join", async (username) => {
     socket.username = username;
-    io.emit("message", {
-      user: "System",
-      text: `${username} has joined the chat`,
-    });
+
+    // Load and send previous messages from DB
+    try {
+      const messages = await Message.find().sort({ timestamp: 1 }).limit(50);
+      socket.emit("loadMessages", messages); // Send to the joining user only
+      io.emit("message", {
+        user: "System",
+        text: `${username} has joined the chat`,
+      });
+    } catch (err) {
+      console.error("Error loading messages:", err);
+    }
   });
 
-  // Handle incoming messages
-  socket.on("sendMessage", (message) => {
-    io.emit("message", { user: socket.username, text: message });
+  socket.on("sendMessage", async (message) => {
+    if (!socket.username) return; // Prevent anonymous messages
+
+    const newMessage = new Message({ user: socket.username, text: message });
+    try {
+      await newMessage.save(); // Save to DB
+      io.emit("message", { user: socket.username, text: message }); // Broadcast
+    } catch (err) {
+      console.error("Error saving message:", err);
+    }
   });
 
-  // Handle disconnection
   socket.on("disconnect", () => {
     if (socket.username) {
       io.emit("message", {

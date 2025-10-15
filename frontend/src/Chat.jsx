@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import io from "socket.io-client";
 
-const socket = io("http://localhost:5000"); // Backend URL
+const socket = io("http://localhost:5000");
 
 function Chat() {
   const [username, setUsername] = useState("");
@@ -14,8 +14,15 @@ function Chat() {
       setMessages((prev) => [...prev, msg]);
     });
 
+    socket.on("loadMessages", (loadedMessages) => {
+      setMessages(
+        loadedMessages.map((msg) => ({ user: msg.user, text: msg.text }))
+      );
+    });
+
     return () => {
       socket.off("message");
+      socket.off("loadMessages");
     };
   }, []);
 
