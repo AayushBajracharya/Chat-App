@@ -3,6 +3,8 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const mongoose = require("mongoose");
+const Message = require("./models/Message");
 
 const app = express();
 const server = http.createServer(app);
@@ -13,14 +15,10 @@ const io = new Server(server, {
   },
 });
 
-const mongoose = require("mongoose");
-
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.error("MongoDB connection error:", err));
-
-const Message = require("./models/Message");
 
 app.use(cors());
 app.use(express.json());
@@ -28,39 +26,50 @@ app.use(express.json());
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
-  socket.on("join", async (username) => {
+  socket.on("join", async ({ username, room }) => {
     socket.username = username;
+    socket.room = room;
 
-    // Load and send previous messages from DB
+    socket.join(room);
+
     try {
-      const messages = await Message.find().sort({ timestamp: 1 }).limit(50);
-      socket.emit("loadMessages", messages); // Send to the joining user only
-      io.emit("message", {
+      const messages = await Message.find({ room })
+        .sort({ timestamp: 1 })
+        .limit(50);
+      socket.emit("loadMessages", messages);
+      io.to(room).emit("message", {
         user: "System",
-        text: `${username} has joined the chat`,
+        text: `${username} has joined the ${room} room`,
       });
     } catch (err) {
       console.error("Error loading messages:", err);
     }
   });
 
-  socket.on("sendMessage", async (message) => {
-    if (!socket.username) return; // Prevent anonymous messages
+  socket.on("sendMessage", async ({ message, room }) => {
+    if (!socket.username || !room) return;
 
-    const newMessage = new Message({ user: socket.username, text: message });
+    const newMessage = new Message({
+      user: socket.username,
+      text: message,
+      room,
+    });
     try {
-      await newMessage.save(); // Save to DB
-      io.emit("message", { user: socket.username, text: message }); // Broadcast
+      await newMessage.save();
+      io.to(room).emit("message", {
+        user: socket.username,
+        text: message,
+      });
     } catch (err) {
       console.error("Error saving message:", err);
     }
   });
 
   socket.on("disconnect", () => {
-    if (socket.username) {
-      io.emit("message", {
+    if (socket.username && socket.room) {
+      io.to(socket.room).emit("message", {
         user: "System",
-        text: `${socket.username} has left the chat`,
+        text: `${socket.username} has left the ${socket.room} room`,
       });
     }
     console.log("User disconnected:", socket.id);

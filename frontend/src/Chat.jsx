@@ -5,6 +5,7 @@ const socket = io("http://localhost:5000");
 
 function Chat() {
   const [username, setUsername] = useState("");
+  const [room, setRoom] = useState("");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [joined, setJoined] = useState(false);
@@ -27,15 +28,15 @@ function Chat() {
   }, []);
 
   const joinChat = () => {
-    if (username) {
-      socket.emit("join", username);
+    if (username && room) {
+      socket.emit("join", { username, room }); // Send both username and room
       setJoined(true);
     }
   };
 
   const sendMessage = () => {
-    if (message) {
-      socket.emit("sendMessage", message);
+    if (message && room) {
+      socket.emit("sendMessage", { message, room }); // Send message with room
       setMessage("");
     }
   };
@@ -52,6 +53,13 @@ function Chat() {
             onChange={(e) => setUsername(e.target.value)}
             className="w-full p-2 mb-4 border border-gray-300 rounded"
           />
+          <input
+            type="text"
+            placeholder="Enter room name"
+            value={room}
+            onChange={(e) => setRoom(e.target.value)}
+            className="w-full p-2 mb-4 border border-gray-300 rounded"
+          />
           <button
             onClick={joinChat}
             className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
@@ -61,7 +69,9 @@ function Chat() {
         </div>
       ) : (
         <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-md flex flex-col h-96">
-          <h2 className="text-2xl font-bold mb-4 text-center">Chat Room</h2>
+          <h2 className="text-2xl font-bold mb-4 text-center">
+            Chat Room: {room}
+          </h2>
           <div className="flex-1 overflow-y-auto mb-4 border border-gray-300 p-2 rounded">
             {messages.map((msg, index) => (
               <div key={index} className="mb-2">
