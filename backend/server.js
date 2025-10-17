@@ -39,9 +39,7 @@ app.post("/signup", async (req, res) => {
     const token = jwt.sign(
       { userId: user._id, username },
       process.env.JWT_SECRET,
-      {
-        expiresIn: "1h",
-      }
+      { expiresIn: "1h" }
     );
     res.status(201).json({ token, username });
   } catch (err) {
@@ -60,9 +58,7 @@ app.post("/login", async (req, res) => {
     const token = jwt.sign(
       { userId: user._id, username },
       process.env.JWT_SECRET,
-      {
-        expiresIn: "1h",
-      }
+      { expiresIn: "1h" }
     );
     res.json({ token, username });
   } catch (err) {
@@ -85,6 +81,9 @@ io.use((socket, next) => {
   }
 });
 
+// Track users in rooms
+const roomUsers = new Map();
+
 io.on("connection", (socket) => {
   console.log(
     "A user connected:",
@@ -99,6 +98,18 @@ io.on("connection", (socket) => {
     socket.join(normalizedRoom);
     console.log(`${socket.user.username} joined room: ${normalizedRoom}`);
 
+    if (!roomUsers.has(normalizedRoom)) {
+      roomUsers.set(normalizedRoom, new Set());
+    }
+    roomUsers.get(normalizedRoom).add(socket.user.username);
+    io.to(normalizedRoom).emit("userList", {
+      users: Array.from(roomUsers.get(normalizedRoom)),
+    });
+    console.log(
+      `User list in ${normalizedRoom}:`,
+      Array.from(roomUsers.get(normalizedRoom))
+    );
+
     try {
       const messages = await Message.find({ room: normalizedRoom })
         .sort({ timestamp: 1 })
@@ -110,12 +121,14 @@ io.on("connection", (socket) => {
           user: msg.user,
           text: msg.text,
           room: msg.room,
+          timestamp: msg.timestamp, // Include timestamp
         }))
       );
       io.to(normalizedRoom).emit("chatMessage", {
         user: "System",
         text: `${socket.user.username} has joined the ${normalizedRoom} room`,
         id: Date.now().toString(),
+        timestamp: new Date(), // Include timestamp
       });
     } catch (err) {
       console.error("Error loading messages:", err);
@@ -140,13 +153,13 @@ io.on("connection", (socket) => {
         user: socket.user.username,
         text: message,
         id: newMessage._id.toString(),
+        timestamp: newMessage.timestamp, // Include timestamp
       });
     } catch (err) {
       console.error("Error saving message:", err);
     }
   });
 
-  // New Typing Event
   socket.on("typing", ({ room, isTyping }) => {
     const normalizedRoom = room.trim().toLowerCase();
     if (!socket.user || !normalizedRoom) return;
@@ -155,7 +168,7 @@ io.on("connection", (socket) => {
         isTyping ? "started" : "stopped"
       } typing in room: ${normalizedRoom}`
     );
-    io.to(normalizedRoom).emit("typing", {
+    socket.to(normalizedRoom).emit("typing", {
       user: socket.user.username,
       isTyping,
     });
@@ -163,10 +176,19 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     if (socket.user && socket.room) {
+      roomUsers.get(socket.room)?.delete(socket.user.username);
+      io.to(socket.room).emit("userList", {
+        users: Array.from(roomUsers.get(socket.room) || []),
+      });
+      console.log(
+        `User list in ${socket.room}:`,
+        Array.from(roomUsers.get(socket.room) || [])
+      );
       io.to(socket.room).emit("chatMessage", {
         user: "System",
         text: `${socket.user.username} has left the ${socket.room} room`,
         id: Date.now().toString(),
+        timestamp: new Date(), // Include timestamp
       });
       console.log(
         `${socket.user.username} disconnected from room: ${socket.room}`

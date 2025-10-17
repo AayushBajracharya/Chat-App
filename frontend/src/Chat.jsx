@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import io from "socket.io-client";
+import { formatDistanceToNow } from "date-fns";
 import Login from "./Login";
 import Signup from "./Signup";
 
@@ -14,6 +15,7 @@ function Chat() {
   const [joined, setJoined] = useState(false);
   const [showSignup, setShowSignup] = useState(false);
   const [typingUsers, setTypingUsers] = useState([]);
+  const [onlineUsers, setOnlineUsers] = useState([]);
   const socketRef = useRef(null);
   const chatRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -53,6 +55,7 @@ function Chat() {
             user: msg.user,
             text: msg.text,
             id: msg.id || Date.now().toString(),
+            timestamp: msg.timestamp ? new Date(msg.timestamp) : new Date(),
           },
         ];
         console.log("Updated messages:", newMessages);
@@ -70,11 +73,12 @@ function Chat() {
           user: msg.user,
           text: msg.text,
           id: msg._id ? msg._id.toString() : Date.now().toString(),
+          timestamp: msg.timestamp ? new Date(msg.timestamp) : new Date(),
         }));
         const allMessages = [
           ...newMessages,
           ...prev.filter((p) => !newMessages.some((n) => n.id === p.id)),
-        ].sort((a, b) => a.id.localeCompare(b.id));
+        ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         console.log("Merged messages:", allMessages);
         return allMessages;
       });
@@ -95,6 +99,11 @@ function Chat() {
       });
     });
 
+    socket.on("userList", ({ users }) => {
+      console.log("Received userList:", users);
+      setOnlineUsers(users);
+    });
+
     return () => {
       socket.off("connect");
       socket.off("connect_error");
@@ -102,6 +111,7 @@ function Chat() {
       socket.off("chatMessage");
       socket.off("loadMessages");
       socket.off("typing");
+      socket.off("userList");
       socket.disconnect();
     };
   }, [token, username]);
@@ -199,45 +209,92 @@ function Chat() {
           </button>
         </div>
       ) : (
-        <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-md flex flex-col h-96">
+        <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-lg flex flex-col h-[600px]">
           <h2 className="text-2xl font-bold mb-4 text-center">
             Chat Room: {room}
           </h2>
-          <div
-            ref={chatRef}
-            className="flex-1 overflow-y-auto mb-4 border border-gray-300 p-2 rounded"
-          >
-            {messages.length === 0 ? (
-              <div className="text-gray-500 text-center">No messages yet</div>
-            ) : (
-              messages.map((msg) => (
-                <div key={msg.id} className="mb-2">
-                  <strong>{msg.user}:</strong> {msg.text}
-                </div>
-              ))
-            )}
-            {typingUsers.length > 0 && (
-              <div className="text-gray-500 italic text-sm">
-                {typingUsers.join(", ")}{" "}
-                {typingUsers.length === 1 ? "is" : "are"} typing...
+          <div className="flex flex-1 overflow-hidden">
+            <div className="flex-1 flex flex-col">
+              <div
+                ref={chatRef}
+                className="flex-1 overflow-y-auto mb-4 border border-gray-300 p-2 rounded"
+              >
+                {messages.length === 0 ? (
+                  <div className="text-gray-500 text-center">
+                    No messages yet
+                  </div>
+                ) : (
+                  messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`mb-2 flex ${
+                        msg.user === username ? "justify-end" : "justify-start"
+                      }`}
+                    >
+                      <div
+                        className={`inline-block p-2 rounded-lg ${
+                          msg.user === username
+                            ? "bg-blue-100 text-right"
+                            : "bg-gray-100 text-left"
+                        }`}
+                      >
+                        <strong>{msg.user}</strong>: {msg.text}
+                        <div className="text-xs text-gray-500 mt-1">
+                          {msg.timestamp
+                            ? formatDistanceToNow(new Date(msg.timestamp), {
+                                addSuffix: true,
+                              })
+                            : "Just now"}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {typingUsers.length > 0 && (
+                  <div className="text-gray-500 italic text-sm">
+                    {typingUsers.join(", ")}{" "}
+                    {typingUsers.length === 1 ? "is" : "are"} typing...
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <div className="flex">
-            <input
-              type="text"
-              placeholder="Type a message"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={handleTyping}
-              className="flex-1 p-2 border border-gray-300 rounded-l"
-            />
-            <button
-              onClick={sendMessage}
-              className="bg-blue-500 text-white p-2 rounded-r hover:bg-blue-600"
-            >
-              Send
-            </button>
+              <div className="flex">
+                <input
+                  type="text"
+                  placeholder="Type a message"
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  onKeyDown={handleTyping}
+                  className="flex-1 p-2 border border-gray-300 rounded-l"
+                />
+                <button
+                  onClick={sendMessage}
+                  className="bg-blue-500 text-white p-2 rounded-r hover:bg-blue-600"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+            <div className="w-1/3 border-l border-gray-300 p-4">
+              <h3 className="text-lg font-semibold mb-2">Online Users</h3>
+              {onlineUsers.length === 0 ? (
+                <div className="text-gray-500">No users online</div>
+              ) : (
+                <ul>
+                  {onlineUsers.map((user) => (
+                    <li
+                      key={user}
+                      className={`mb-1 ${
+                        user === username
+                          ? "text-blue-500 font-bold"
+                          : "text-gray-700"
+                      }`}
+                    >
+                      {user}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}
