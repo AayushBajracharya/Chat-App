@@ -4,13 +4,16 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
 const Message = require("./models/Message");
+const User = require("./models/User");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: process.env.FRONTEND_URL,
     methods: ["GET", "POST"],
   },
 });
@@ -20,26 +23,99 @@ mongoose
   .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-app.use(cors());
+app.use(cors({ origin: process.env.FRONTEND_URL }));
 app.use(express.json());
 
+// Signup Route
+app.post("/signup", async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const existingUser = await User.findOne({ username });
+    if (existingUser) {
+      return res.status(400).json({ error: "Username already exists" });
+    }
+    const user = new User({ username, password });
+    await user.save();
+    const token = jwt.sign(
+      { userId: user._id, username },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1h",
+      }
+    );
+    res.status(201).json({ token, username });
+  } catch (err) {
+    res.status(500).json({ error: "Error signing up" });
+  }
+});
+
+// Login Route
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const user = await User.findOne({ username });
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    const token = jwt.sign(
+      { userId: user._id, username },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1h",
+      }
+    );
+    res.json({ token, username });
+  } catch (err) {
+    res.status(500).json({ error: "Error logging in" });
+  }
+});
+
+// Middleware to verify JWT for Socket.io
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) {
+    return next(new Error("Authentication error: No token provided"));
+  }
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    socket.user = decoded;
+    next();
+  } catch (err) {
+    next(new Error("Authentication error: Invalid token"));
+  }
+});
+
 io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
+  console.log(
+    "A user connected:",
+    socket.id,
+    "Username:",
+    socket.user.username
+  );
 
-  socket.on("join", async ({ username, room }) => {
-    socket.username = username;
-    socket.room = room;
-
-    socket.join(room);
+  socket.on("join", async ({ room }) => {
+    const normalizedRoom = room.trim().toLowerCase();
+    socket.room = normalizedRoom;
+    socket.join(normalizedRoom);
+    console.log(`${socket.user.username} joined room: ${normalizedRoom}`);
 
     try {
-      const messages = await Message.find({ room })
+      const messages = await Message.find({ room: normalizedRoom })
         .sort({ timestamp: 1 })
         .limit(50);
-      socket.emit("loadMessages", messages);
-      io.to(room).emit("message", {
+      socket.emit(
+        "loadMessages",
+        messages.map((msg) => ({
+          _id: msg._id.toString(),
+          user: msg.user,
+          text: msg.text,
+          room: msg.room,
+        }))
+      );
+      io.to(normalizedRoom).emit("chatMessage", {
         user: "System",
-        text: `${username} has joined the ${room} room`,
+        text: `${socket.user.username} has joined the ${normalizedRoom} room`,
+        id: Date.now().toString(),
       });
     } catch (err) {
       console.error("Error loading messages:", err);
@@ -47,30 +123,54 @@ io.on("connection", (socket) => {
   });
 
   socket.on("sendMessage", async ({ message, room }) => {
-    if (!socket.username || !room) return;
+    const normalizedRoom = room.trim().toLowerCase();
+    if (!socket.user || !normalizedRoom) return;
 
     const newMessage = new Message({
-      user: socket.username,
+      user: socket.user.username,
       text: message,
-      room,
+      room: normalizedRoom,
     });
     try {
       await newMessage.save();
-      io.to(room).emit("message", {
-        user: socket.username,
+      console.log(
+        `Message saved: ${message} in room ${normalizedRoom} by ${socket.user.username}`
+      );
+      io.to(normalizedRoom).emit("chatMessage", {
+        user: socket.user.username,
         text: message,
+        id: newMessage._id.toString(),
       });
     } catch (err) {
       console.error("Error saving message:", err);
     }
   });
 
+  // New Typing Event
+  socket.on("typing", ({ room, isTyping }) => {
+    const normalizedRoom = room.trim().toLowerCase();
+    if (!socket.user || !normalizedRoom) return;
+    console.log(
+      `${socket.user.username} ${
+        isTyping ? "started" : "stopped"
+      } typing in room: ${normalizedRoom}`
+    );
+    io.to(normalizedRoom).emit("typing", {
+      user: socket.user.username,
+      isTyping,
+    });
+  });
+
   socket.on("disconnect", () => {
-    if (socket.username && socket.room) {
-      io.to(socket.room).emit("message", {
+    if (socket.user && socket.room) {
+      io.to(socket.room).emit("chatMessage", {
         user: "System",
-        text: `${socket.username} has left the ${socket.room} room`,
+        text: `${socket.user.username} has left the ${socket.room} room`,
+        id: Date.now().toString(),
       });
+      console.log(
+        `${socket.user.username} disconnected from room: ${socket.room}`
+      );
     }
     console.log("User disconnected:", socket.id);
   });
